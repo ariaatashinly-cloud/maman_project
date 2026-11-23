@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111927">
+  <title>آرشیو شخصی | DriveBridge</title>
+  <style>
+    :root {font-family: system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;color:#e8ecf5;background:#0e1420}
+    * {box-sizing:border-box}
+    body {margin:0;min-height:100vh;background:radial-gradient(circle at 12% 0%,#25365a 0%,transparent 35%),#0e1420}
+    button,input {font:inherit}
+    button {cursor:pointer;border:0;border-radius:11px;padding:10px 16px;color:#0e1420;background:#b9ebd7;font-weight:700}
+    button:hover {filter:brightness(1.08)} button:disabled {opacity:.55;cursor:not-allowed}
+    button.quiet {background:#293447;color:#d7e1f2} button.danger {background:#512a39;color:#ffd9de}
+    a {color:#b9ebd7;text-decoration:none} a:hover {text-decoration:underline}
+    input {width:100%;border:1px solid #405068;border-radius:11px;background:#111a2a;color:#fff;padding:12px 14px;outline:none}
+    input:focus {border-color:#b9ebd7}
+    main {max-width:1120px;margin:auto;padding:34px 20px 75px}
+    .top {display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:32px}
+    .brand {font-size:1.3rem;font-weight:800;letter-spacing:.1px}.brand span{color:#b9ebd7}
+    .eyebrow {color:#a5c2c0;font-size:.9rem;margin:0 0 10px}
+    h1{font-size:clamp(1.8rem,5vw,3rem);margin:0 0 12px}h2{margin:0 0 14px;font-size:1.2rem}
+    p {color:#aab5c7;line-height:1.85} .hero {margin:26px 0 30px}
+    .card{border:1px solid #33435a;background:#182233ec;border-radius:20px;padding:24px;box-shadow:0 18px 48px #050a142b}
+    .grid{display:grid;grid-template-columns:1.35fr .8fr;gap:18px;margin-bottom:24px}
+    .muted{color:#9baec6} .small{font-size:.85rem} .pill{display:inline-flex;border:1px solid #3e5a63;color:#b9ebd7;border-radius:99px;padding:7px 13px;font-size:.82rem}
+    .row{display:flex;align-items:center;gap:10px;flex-wrap:wrap} .space{justify-content:space-between}
+    .file-input{border:1px dashed #64837f;border-radius:15px;padding:30px 16px;text-align:center;display:block;cursor:pointer;background:#20304470}
+    .file-input input{display:none}.file-input strong{display:block;font-size:1.05rem}.file-input small{color:#aab5c7}
+    .progress{height:8px;background:#35465c;border-radius:10px;overflow:hidden;margin:16px 0}
+    .progress>span{display:block;height:100%;width:0;background:#b9ebd7;transition:width .2s}
+    .list{display:grid;gap:11px}.file{padding:18px;border:1px solid #33435a;border-radius:15px;background:#182233}
+    .file-name{overflow-wrap:anywhere;font-weight:700}.file-meta{color:#9baec6;font-size:.82rem;margin:7px 0 14px}
+    .file button{font-size:.84rem;padding:8px 12px}.file a{display:inline-flex;padding:8px 2px}
+    .status{padding:4px 10px;border-radius:7px;background:#31475c;color:#d4e9fb;font-size:.82rem}
+    .status.ready{color:#b9ebd7;background:#24453e}.status.failed{color:#ffd0d0;background:#59333b}
+    .notice {padding:12px 14px;background:#273445;border-radius:11px;color:#e1eafa;margin:12px 0;min-height:44px}
+    .hidden{display:none!important}.login{max-width:420px;margin:13vh auto}.login label{display:block;margin:20px 0 12px}
+    .filter{max-width:300px}.empty{text-align:center;padding:32px;color:#aab5c7}
+    @media(max-width:740px){.grid{grid-template-columns:1fr}.top{align-items:flex-start} main{padding:22px 14px 50px}.card{padding:18px}}
+  </style>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <main>
+    <div class="top"><div class="brand">Aria <span>Drive</span> / آرشیو من</div><button class="quiet hidden" id="logout">خروج</button></div>
+    <section id="login-panel" class="card login hidden">
+      <p class="eyebrow">دسترسی خصوصی</p><h1>ورود به پنل</h1>
+      <p>با رمزی که روی سرور تنظیم کرده‌ای وارد شو.</p>
+      <form id="login-form"><label for="password">رمز پنل</label><input type="password" id="password" autocomplete="current-password" required><p><button type="submit">ورود</button></p></form>
+      <div class="notice hidden" id="login-message" role="status"></div>
+    </section>
+    <section id="dashboard" class="hidden">
+      <div class="hero"><p class="eyebrow">تلگرام ← سرور شما ← گوگل‌درایو</p><h1>همهٔ فایل‌ها، یک‌جا.</h1><p>فایل را به ربات بفرست یا از اینجا آپلود کن؛ لینک تماشای ویدیو از گوگل‌درایو آماده می‌شود.</p></div>
+      <div class="grid">
+        <div class="card"><h2>آپلود از مرورگر</h2>
+          <label class="file-input"><strong>برای انتخاب فایل اینجا بزن</strong><small>ویدیو، صدا، عکس یا هر فایل دیگر · آپلود بخش‌بندی‌شده</small><input type="file" id="file-picker"></label>
+          <div class="progress hidden" id="progress"><span id="progress-bar"></span></div>
+          <div id="upload-status" class="muted small" role="status"></div>
+        </div>
+        <div class="card"><h2>اتصال گوگل‌درایو</h2><p id="drive-status">در حال بررسی…</p>
+          <a href="/auth/google/start" id="connect-link"><button type="button">اتصال حساب گوگل</button></a>
+          <p class="small">فایل‌ها به پوشهٔ اختصاصی برنامه در حساب شما اضافه می‌شوند. لینک‌ها در ابتدا خصوصی‌اند.</p>
+        </div>
+      </div>
+      <section class="card"><div class="row space"><h2>فایل‌های من</h2><div class="row"><input id="search" class="filter" type="search" placeholder="جست‌وجوی نام فایل"><button id="refresh" class="quiet" type="button">تازه‌سازی</button></div></div>
+        <div id="message" class="notice hidden" role="status"></div><div id="files" class="list"></div>
+      </section>
+    </section>
+  </main>
+</body>
+</html>
