@@ -20,7 +20,7 @@ class PanelTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.config = Config(
-            token='test:token', owner=12345, api_url='http://127.0.0.1:8081',
+            token='test:token', owners={12345}, api_url='http://127.0.0.1:8081',
             telegram_root='/missing', client_id='test-id', client_secret='test-secret',
             public_url='https://localhost.test', admin_password='a-long-test-password',
             session_secret='y' * 48, data_dir=self.temp.name, secure_cookie=False,

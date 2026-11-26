@@ -30,7 +30,7 @@ COOKIE_AGE = 24 * 3600
 @dataclass
 class Config:
     token: str
-    owner: int
+    owners: set[int]
     api_url: str
     telegram_root: str
     client_id: str
@@ -46,7 +46,8 @@ class Config:
     @classmethod
     def from_env(cls):
         return cls(
-            token=os.environ['TELEGRAM_BOT_TOKEN'], owner=int(os.environ['TELEGRAM_OWNER_ID']),
+            token=os.environ['TELEGRAM_BOT_TOKEN'],
+            owners={int(x.strip()) for x in os.environ['TELEGRAM_OWNER_ID'].split(',') if x.strip()},
             api_url=os.getenv('TELEGRAM_API_URL', 'http://telegram-api:8081').rstrip('/'),
             telegram_root=os.getenv('TELEGRAM_FILES_ROOT', '/var/lib/telegram-bot-api'),
             client_id=os.environ['GOOGLE_CLIENT_ID'],
@@ -114,28 +115,110 @@ def create_app(config=None):
     if not 0 < config.max_upload_gb <= 100:
         raise ValueError('MAX_UPLOAD_GB must be in the range 0..100')
     store = Store(config.data_dir)
+    for owner in config.owners:
+        store.seed_admin(owner)
     drive = Drive(config.data_dir, config.client_id, config.client_secret,
                   config.public_url, config.folder_id)
     upload_lock = asyncio.Lock()
     attempts = {}
+    processing_tasks = set()
 
     async def send(chat, message):
         try:
-            await asyncio.to_thread(bot_call, config, 'sendMessage',
-                                    {'chat_id': chat, 'text': message})
+            return await asyncio.to_thread(bot_call, config, 'sendMessage',
+                                           {'chat_id': chat, 'text': message})
         except Exception:
             LOG.exception('Could not notify owner')
 
+    def identity(message):
+        person = message.get('from', {})
+        name = ' '.join(filter(None, (person.get('first_name'), person.get('last_name')))).strip()
+        return person.get('id'), person.get('username'), name
+
+    async def admin_command(chat, who, command, argument):
+        if command == '/panel':
+            enabled = sum(bool(row['enabled']) for row in store.users())
+            await send(chat, 'پنل مدیریت ربات\n\n'
+                       f'کاربران فعال: {enabled}\n'
+                       '/add 123456789 — افزودن با شناسه\n'
+                       '/add @username — افزودن کاربری که قبلاً ربات را Start کرده\n'
+                       '/del 123456789 — حذف دسترسی\n'
+                       '/users — فهرست کاربران\n'
+                       '/files — فایل‌های اخیر خودت')
+            return True
+        if command == '/users':
+            rows = store.users()
+            lines = ['کاربران ربات:']
+            for row in rows:
+                state = '✅' if row['enabled'] else '⛔️'
+                admin = ' مدیر' if row['is_admin'] else ''
+                username = (' @' + row['username']) if row['username'] else ''
+                lines.append(f"{state} {row['telegram_id']}{username}{admin}")
+            await send(chat, '\n'.join(lines))
+            return True
+        if command in ('/add', '/del'):
+            target = argument.strip().split(' ', 1)[0] if argument.strip() else ''
+            if not target:
+                await send(chat, f'نمونه: {command} 5695376881')
+                return True
+            try:
+                row = store.user(target)
+            except ValueError:
+                row = None
+            if target.startswith('@') and not row:
+                await send(chat, 'این نام کاربری هنوز شناخته نشده است. آن شخص ابتدا /start یا /id را به ربات بفرستد؛ سپس دوباره اضافه‌اش کن.')
+                return True
+            if row:
+                target_id = row['telegram_id']
+            else:
+                try:
+                    target_id = int(target)
+                except ValueError:
+                    await send(chat, 'شناسه معتبر نیست؛ شناسهٔ عددی یا @username بفرست.')
+                    return True
+            if command == '/del' and target_id in config.owners:
+                await send(chat, 'مدیر اصلی را نمی‌توان از داخل ربات حذف کرد.')
+                return True
+            store.set_user_access(target_id, command == '/add')
+            await send(chat, ('دسترسی فعال شد: ' if command == '/add' else 'دسترسی غیرفعال شد: ') + str(target_id))
+            return True
+        return False
+
     async def handle_message(message):
-        who = message.get('from', {}).get('id')
+        who, username, display_name = identity(message)
         chat = message.get('chat', {}).get('id')
         if who is None or chat is None or message.get('chat', {}).get('type') != 'private':
             return
-        if message.get('text', '').strip().split(' ', 1)[0].split('@')[0] == '/id':
+        store.remember_user(who, username, display_name)
+        text = message.get('text', '').strip()
+        parts = text.split(' ', 1)
+        command = parts[0].split('@')[0].lower() if parts and parts[0].startswith('/') else ''
+        argument = parts[1] if len(parts) > 1 else ''
+        if command == '/id':
             await send(chat, f'شناسهٔ عددی شما: {who}')
             return
-        if who != config.owner:
+        account = store.user(who)
+        if account and account['is_admin'] and await admin_command(chat, who, command, argument):
+            return
+        if not account or not account['enabled']:
             await send(chat, 'این ربات شخصی است.')
+            return
+        if command in ('/start', '/help'):
+            await send(chat, 'فایل یا ویدیو را بفرست تا در پوشهٔ اختصاصی خودت در گوگل‌درایو ذخیره شود.\n/files — فایل‌های اخیر\n/id — شناسهٔ عددی')
+            return
+        if command == '/files':
+            jobs = store.recent_user_jobs(who)
+            if not jobs:
+                await send(chat, 'هنوز فایلی در آرشیو تو ثبت نشده است.')
+                return
+            lines = ['فایل‌های اخیر تو:']
+            for job in jobs:
+                mark = '✅' if job['status'] == 'ready' else ('❌' if job['status'] == 'failed' else '⏳')
+                line = f"{mark} {job['name']}"
+                if job['drive_url']:
+                    line += '\n' + job['drive_url']
+                lines.append(line)
+            await send(chat, '\n\n'.join(lines))
             return
         if not drive.connected():
             await send(chat, 'اول از پنل، گوگل‌درایو را وصل کن: ' + config.public_url)
@@ -169,7 +252,7 @@ def create_app(config=None):
                 return
             item_id = uuid.uuid4().hex
             store.enqueue(item_id, filename, mime, size, str(source), 'telegram', chat,
-                          message['message_id'])
+                          message['message_id'], who, username)
             await send(chat, f'«{filename}» به صف آپلود اضافه شد. بعد از پایان، لینک را همین‌جا می‌فرستم.')
         except sqlite3.IntegrityError:
             pass  # Telegram redelivered an update after a process restart.
@@ -198,16 +281,72 @@ def create_app(config=None):
                 LOG.exception('Telegram polling temporarily failed')
                 await asyncio.sleep(5)
 
+    async def processing_timer(chat, message_id, filename, link, transfer_seconds):
+        for elapsed in range(30, 631, 30):
+            await asyncio.sleep(30)
+            text = (f'آپلود «{filename}» کامل شد.\n'
+                    f'زمان انتقال: {max(1, round(transfer_seconds))} ثانیه\n'
+                    f'زمان سپری‌شده از پردازش گوگل: {elapsed // 60}:{elapsed % 60:02d}\n'
+                    'برای بررسی پخش، لینک را باز کن:\n' + link)
+            try:
+                await asyncio.to_thread(bot_call, config, 'editMessageText', {
+                    'chat_id': chat, 'message_id': message_id, 'text': text,
+                })
+            except Exception:
+                LOG.warning('Could not update Google processing timer')
+                return
+
     def upload_job(job):
+        started = time.time()
+        progress_message = None
+        last_notice = 0.0
+        user = store.user(job['telegram_user']) if job['telegram_user'] else None
+        folder_id = None
+        if user:
+            folder_id = user['drive_folder_id']
+            if not folder_id:
+                folder_id = drive.ensure_user_folder(
+                    user['telegram_id'], user['username'] or user['display_name'])
+                store.set_user_folder(user['telegram_id'], folder_id)
+
+        def progress(uploaded, total):
+            nonlocal progress_message, last_notice
+            now = time.time()
+            elapsed = max(now - started, 0.1)
+            speed = uploaded / elapsed
+            store.update_job(job['id'], uploaded=uploaded, speed=speed,
+                             upload_started=started)
+            if not job['telegram_chat'] or (uploaded < total and now - last_notice < 4):
+                return
+            percent = round(uploaded * 100 / total) if total else 100
+            speed_mb = speed / 1024 / 1024
+            text = (f"آپلود «{job['name']}» به گوگل‌درایو\n"
+                    f"{percent}٪ · سرعت {speed_mb:.2f} مگابایت‌برثانیه")
+            try:
+                if progress_message is None:
+                    result = bot_call(config, 'sendMessage',
+                                      {'chat_id': job['telegram_chat'], 'text': text})
+                    progress_message = result['message_id']
+                else:
+                    bot_call(config, 'editMessageText', {
+                        'chat_id': job['telegram_chat'], 'message_id': progress_message,
+                        'text': text,
+                    })
+                last_notice = now
+            except Exception:
+                LOG.warning('Could not update Telegram upload progress')
+
         existing = drive.find_job_file(job['id'])
         result = existing or drive.upload(job['source'], job['name'], job['mime'],
-                                          job['size'], job['id'])
+                                          job['size'], job['id'], folder_id, progress)
         file_id = result['id']
         link = result.get('webViewLink') or f'https://drive.google.com/file/d/{file_id}/view'
-        store.update_job(job['id'], status='ready', drive_id=file_id, drive_url=link, error=None)
+        finished = time.time()
+        store.update_job(job['id'], status='ready', drive_id=file_id, drive_url=link,
+                         uploaded=job['size'], upload_finished=finished, error=None)
         if job['source_kind'] == 'browser':
             Path(job['source']).unlink(missing_ok=True)
-        return link
+        return link, finished - started, progress_message
 
     async def worker():
         while True:
@@ -217,10 +356,28 @@ def create_app(config=None):
                     await asyncio.sleep(2)
                     continue
                 try:
-                    link = await asyncio.to_thread(upload_job, job)
+                    link, elapsed, progress_message = await asyncio.to_thread(upload_job, job)
                     if job['telegram_chat']:
-                        await send(job['telegram_chat'],
-                                   'آپلود «' + job['name'] + '» کامل شد.\nلینک خصوصی گوگل‌درایو: ' + link)
+                        message = ('آپلود «' + job['name'] + '» کامل شد.\n'
+                                   f'زمان انتقال: {max(1, round(elapsed))} ثانیه\n'
+                                   'گوگل اکنون نسخهٔ پخش ویدیو را پردازش می‌کند؛ زمان دقیق پایان را اعلام نمی‌کند.\n'
+                                   'لینک خصوصی گوگل‌درایو: ' + link)
+                        if progress_message:
+                            try:
+                                await asyncio.to_thread(bot_call, config, 'editMessageText', {
+                                    'chat_id': job['telegram_chat'],
+                                    'message_id': progress_message, 'text': message,
+                                })
+                            except Exception:
+                                await send(job['telegram_chat'], message)
+                        else:
+                            result = await send(job['telegram_chat'], message)
+                            progress_message = result.get('message_id') if result else None
+                        if job['mime'].startswith('video/') and progress_message:
+                            task = asyncio.create_task(processing_timer(
+                                job['telegram_chat'], progress_message, job['name'], link, elapsed))
+                            processing_tasks.add(task)
+                            task.add_done_callback(processing_tasks.discard)
                 except Exception as exc:
                     LOG.exception('Drive upload failed for job %s', job['id'])
                     store.update_job(job['id'], status='failed', error=str(exc)[:350])
@@ -242,7 +399,10 @@ def create_app(config=None):
         finally:
             for task in tasks:
                 task.cancel()
+            for task in processing_tasks:
+                task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
+            await asyncio.gather(*processing_tasks, return_exceptions=True)
 
     app = FastAPI(title='DriveBridge', docs_url=None, redoc_url=None,
                   openapi_url=None, lifespan=lifespan)
@@ -276,7 +436,8 @@ def create_app(config=None):
     def public_job(row):
         return {key: row[key] for key in
                 ('id', 'name', 'mime', 'size', 'status', 'drive_url', 'permission_id',
-                 'error', 'created')}
+                 'error', 'created', 'uploaded', 'speed', 'upload_started',
+                 'upload_finished', 'telegram_user', 'telegram_username')}
 
     @app.get('/')
     async def home():
@@ -297,7 +458,7 @@ def create_app(config=None):
     async def me(req: WebRequest):
         cookie = require_admin(req)
         return {'csrf': csrf(config, cookie), 'connected': drive.connected(),
-                'owner': config.owner}
+                'owners': sorted(config.owners)}
 
     @app.post('/api/login')
     async def login(req: WebRequest):

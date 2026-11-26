@@ -25,6 +25,12 @@ function formatSize(size) {
   return `${size.toFixed(i ? 1 : 0)} ${units[i]}`;
 }
 
+function formatDuration(seconds) {
+  seconds = Math.max(0, Math.floor(seconds || 0));
+  const minutes = Math.floor(seconds / 60);
+  return `${minutes}:${String(seconds % 60).padStart(2, '0')}`;
+}
+
 function makeButton(label, action, style = 'quiet') {
   const button = document.createElement('button');
   button.type = 'button';
@@ -54,6 +60,17 @@ function render() {
     const meta = document.createElement('div'); meta.className = 'file-meta';
     meta.textContent = `${formatSize(file.size)} · ${new Intl.DateTimeFormat('fa-IR', {dateStyle:'medium', timeStyle:'short'}).format(new Date(file.created * 1000))}`;
     card.append(meta);
+    if (file.status === 'uploading') {
+      const progress = document.createElement('div'); progress.className = 'file-meta';
+      const percent = file.size ? Math.round(100 * (file.uploaded || 0) / file.size) : 0;
+      progress.textContent = `${percent}٪ · سرعت ${formatSize(file.speed || 0)}/ثانیه`;
+      card.append(progress);
+    }
+    if (file.status === 'ready' && file.mime.startsWith('video/') && file.upload_finished) {
+      const processing = document.createElement('div'); processing.className = 'file-meta';
+      processing.textContent = `زمان گذشته از شروع پردازش گوگل: ${formatDuration(Date.now() / 1000 - file.upload_finished)}`;
+      card.append(processing);
+    }
     if (file.error) {const err = document.createElement('p'); err.textContent = file.error; card.append(err);}
     const actions = document.createElement('div'); actions.className = 'row';
     if (file.status === 'ready') {
@@ -153,3 +170,4 @@ $('search').addEventListener('input', render);
 $('file-picker').addEventListener('change', event => upload(event.target.files[0]));
 initialize();
 setInterval(() => {if (csrfToken) refresh().catch(() => {});}, 10000);
+setInterval(() => {if (csrfToken) render();}, 1000);

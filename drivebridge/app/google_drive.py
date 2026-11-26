@@ -137,11 +137,31 @@ class Drive:
         }))
         return (data.get('files') or [None])[0]
 
-    def upload(self, path, name, mime, size, job_id):
+    def ensure_user_folder(self, telegram_id, label=None):
+        root = self.ensure_folder()
+        marker = str(int(telegram_id))
+        query = ("trashed = false and mimeType = 'application/vnd.google-apps.folder' "
+                 "and appProperties has { key='telegramUserId' and value='" + marker + "' }")
+        data = self.json_api('GET', '/files?' + urlencode({
+            'q': query, 'fields': 'files(id,name)', 'pageSize': 2,
+        }))
+        found = data.get('files') or []
+        if found:
+            return found[0]['id']
+        clean = re.sub(r'[^\w.@ -]+', '_', str(label or '')).strip()[:60]
+        folder = self.json_api('POST', '/files?fields=id', {
+            'name': (clean + ' - ' if clean else '') + marker,
+            'mimeType': 'application/vnd.google-apps.folder',
+            'parents': [root],
+            'appProperties': {'telegramUserId': marker},
+        })
+        return folder['id']
+
+    def upload(self, path, name, mime, size, job_id, parent_id=None, progress=None):
         path = Path(path)
         if not path.is_file() or path.stat().st_size != size:
             raise DriveError('Source file is missing or changed. Please send it again.')
-        metadata = {'name': name, 'parents': [self.ensure_folder()],
+        metadata = {'name': name, 'parents': [parent_id or self.ensure_folder()],
                     'appProperties': {'bridgeJobId': job_id}}
         headers = {
             'Authorization': 'Bearer ' + self.access_token(),
@@ -175,7 +195,10 @@ class Drive:
                     try:
                         with request('PUT', session_url, put_headers, chunk, timeout=180) as response:
                             if response.status in (200, 201):
-                                return json.load(response)
+                                result = json.load(response)
+                                if progress:
+                                    progress(size, size)
+                                return result
                             if response.status == 308:
                                 acknowledged = response.headers.get('Range', '')
                                 match = re.fullmatch(r'bytes=0-(\d+)', acknowledged)
@@ -195,6 +218,8 @@ class Drive:
                     raise DriveError('Upload failed repeatedly.')
                 if offset > before:
                     consecutive_failures = 0
+                    if progress:
+                        progress(offset, size)
                 else:
                     consecutive_failures += 1
                     if consecutive_failures >= 6:
